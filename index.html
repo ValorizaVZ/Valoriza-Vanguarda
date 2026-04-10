@@ -1075,14 +1075,19 @@ function fixDateStr(v){
 }
 
 function fixValueStr(v){
-  // Garante que value é um número limpo sem formato BR
+  // Converte qualquer formato para número float (uso interno)
   if(v===null||v===undefined||v==='') return '0';
   if(typeof v==='number') return String(Math.round(v*100)/100);
   var s=String(v).trim();
-  // Formato BR: "1.997,00" → remover pontos de milhar, trocar vírgula
   if(s.indexOf(',')>=0) s=s.replace(/\./g,'').replace(',','.');
   var n=parseFloat(s);
   return isNaN(n)?'0':String(Math.round(n*100)/100);
+}
+
+function fmtBRForSheets(v){
+  // Formata número para salvar no Sheets no padrão BR: 1.000,89
+  var n=parseFloat(fixValueStr(v))||0;
+  return n.toFixed(2).replace('.',',').replace(/(\d)(?=(\d{3})+,)/g,'$1.');
 }
 
 async function pullFromSheets(){
@@ -1197,14 +1202,19 @@ function fixDateStr(v){
 }
 
 function fixValueStr(v){
-  // Garante que value é um número limpo sem formato BR
+  // Converte qualquer formato para número float (uso interno)
   if(v===null||v===undefined||v==='') return '0';
   if(typeof v==='number') return String(Math.round(v*100)/100);
   var s=String(v).trim();
-  // Formato BR: "1.997,00" → remover pontos de milhar, trocar vírgula
   if(s.indexOf(',')>=0) s=s.replace(/\./g,'').replace(',','.');
   var n=parseFloat(s);
   return isNaN(n)?'0':String(Math.round(n*100)/100);
+}
+
+function fmtBRForSheets(v){
+  // Formata número para salvar no Sheets no padrão BR: 1.000,89
+  var n=parseFloat(fixValueStr(v))||0;
+  return n.toFixed(2).replace('.',',').replace(/(\d)(?=(\d{3})+,)/g,'$1.');
 }
 
 function sanitizeRow(sheet, row){
@@ -1217,8 +1227,8 @@ function sanitizeRow(sheet, row){
   }
   // Corrigir date — sempre YYYY-MM-DD
   if(r.date) r.date=fixDateStr(r.date);
-  // Corrigir value — sempre número limpo
-  if(r.value!==undefined) r.value=fixValueStr(r.value);
+  // Corrigir value — formato BR para o Sheets: 1.000,89
+  if(r.value!==undefined) r.value=fmtBRForSheets(r.value);
   return r;
 }
 
@@ -1249,19 +1259,21 @@ async function pushPendingToSheets(){
     function sanRev(r){
       return Object.assign({},r,{
         ym: fixYm(r.ym)||(r.date||'').slice(0,7)||'',
-        value: String(Math.round((+r.value||0)*100)/100)
+        date: fixDateStr(r.date||''),
+        value: fmtBRForSheets(r.value)
       });
     }
     function sanExp(e){
       return Object.assign({},e,{
         ym: fixYm(e.ym)||(e.date||'').slice(0,7)||'',
-        value: String(Math.round((+e.value||0)*100)/100)
+        date: fixDateStr(e.date||''),
+        value: fmtBRForSheets(e.value)
       });
     }
     function sanBal(ym,v){
       return Object.assign({},v,{
         ym: fixYm(ym)||ym,
-        value: String(Math.round((+v.value||0)*100)/100)
+        value: fmtBRForSheets(v.value)
       });
     }
     const payload={
@@ -1300,7 +1312,14 @@ const TYP_DEFAULT = CFG.types || [
 ];
 function getTypes(){
   const raw = getSetting('__types__');
-  const custom = raw ? JSON.parse(raw) : [];
+  var custom = [];
+  if(raw){
+    try{
+      var parsed = JSON.parse(raw);
+      // Garantir que é um array iterável
+      custom = Array.isArray(parsed) ? parsed : [];
+    }catch(e){ custom = []; }
+  }
   return [...TYP_DEFAULT, ...custom];
 }
 async function persistTypes(types){
@@ -1927,7 +1946,13 @@ async function delRv(id){
 function setRvTp(id,v){
   const ym=ymOf(S.month);
   const r=getRvs(ym).find(x=>x.id===id);
-  if(r){r.type=v;r._upd=Date.now();saveLocalCache();queueWrite('revenues',[r]);}
+  if(r){
+    r.type=v;
+    r._upd=Date.now();
+    saveLocalCache();
+    // Salva só esse registro no Sheets — não reescreve tudo
+    queueWrite('revenues',[sanitizeRow('revenues', Object.assign({},r))]);
+  }
 }
 
 function renderRevs(){
@@ -2023,8 +2048,11 @@ function setExClHier(sel){
 // ── MEMÓRIA DE SUBCATEGORIAS ──────────────────────────────────────
 // Persiste a classificação de cada subcategoria para uso em futuras importações
 function getSubMemory(){
-  try{ return JSON.parse(CACHE.settings['__sub_class__']||'{}'); }
-  catch(e){ return {}; }
+  try{
+    var raw=CACHE.settings['__sub_class__']||'{}';
+    var parsed=JSON.parse(raw);
+    return (parsed&&typeof parsed==='object'&&!Array.isArray(parsed))?parsed:{};
+  }catch(e){ return {}; }
 }
 function saveSubMemory(sub, classif){
   const mem=getSubMemory();
@@ -3421,8 +3449,10 @@ function saveTcvCache(){
 function loadTcvCache(){
   try{
     var raw=CACHE.settings['__tcv__'];
-    if(raw) CACHE.tcv=JSON.parse(raw);
-    else CACHE.tcv={};
+    if(raw){
+      var parsed=JSON.parse(raw);
+      CACHE.tcv=(parsed&&typeof parsed==='object')?parsed:{};
+    } else { CACHE.tcv={}; }
   }catch(e){ CACHE.tcv={}; }
 }
 
