@@ -795,7 +795,6 @@ body.pres #app{margin-top:34px}
       <div id="pg-settings" class="page">
         <div class="ph">
           <div><div class="pt">Configurações</div><div class="ps">Dados da empresa e tipos de recebimento</div></div>
-          <div class="pa"><button class="btn btn-p btn-sm" onclick="openTypeMo()">+ Novo tipo</button></div>
         </div>
 
         <!-- DADOS DA EMPRESA -->
@@ -887,7 +886,7 @@ body.pres #app{margin-top:34px}
 
         <!-- TIPOS DE RECEBIMENTO -->
         <div class="panel">
-          <div class="ph2" style="padding-bottom:11px"><span class="pt2">Tipos de Recebimento</span></div>
+          <div class="ph2" style="padding-bottom:11px"><span class="pt2">Tipos de Recebimento</span><button class="btn btn-p btn-sm" onclick="openTypeMo()">+ Novo tipo</button></div>
           <div id="typList"></div>
         </div>
       </div>
@@ -1218,9 +1217,27 @@ async function pullFromSheets(){
   });
   // Histórico
   CACHE.history = data.history || [];
-  // Settings
+  // Settings — preservar tipos novos criados pelo usuário
+  var oldTypesRaw = CACHE.settings['__types__'] || '';
   CACHE.settings = {};
   (data.settings||[]).forEach(function(s){ CACHE.settings[s.key]=s.value; });
+  // Mesclar tipos: se Sheets não tiver __types__ ou tiver menos, preservar os locais
+  if(oldTypesRaw){
+    try{
+      var oldTypes=JSON.parse(oldTypesRaw)||[];
+      var newTypesRaw=CACHE.settings['__types__']||'[]';
+      var newTypes=JSON.parse(newTypesRaw)||[];
+      var defaultIds=TYP_DEFAULT.map(function(t){return t.id;});
+      // Juntar: tipos do Sheets + tipos locais que não estão no Sheets
+      var merged=newTypes.slice();
+      oldTypes.forEach(function(t){
+        if(defaultIds.indexOf(t.id)<0 && !merged.find(function(x){return x.id===t.id;})){
+          merged.push(t);
+        }
+      });
+      if(merged.length>0) CACHE.settings['__types__']=JSON.stringify(merged);
+    }catch(e){}
+  }
   // Serviços
   CACHE.services = (data.services||[]).map(function(s){
     try{ s.items=JSON.parse(s.items||'[]'); }catch(e){ s.items=[]; }
@@ -1386,14 +1403,18 @@ function getTypes(){
   if(raw){
     try{
       var parsed = JSON.parse(raw);
-      // Garantir que é um array iterável
       custom = Array.isArray(parsed) ? parsed : [];
     }catch(e){ custom = []; }
   }
-  return [...TYP_DEFAULT, ...custom];
+  // Mesclar: padrões + novos criados pelo usuário (sem duplicar)
+  var defaultIds = TYP_DEFAULT.map(function(t){return t.id;});
+  var extras = custom.filter(function(t){return defaultIds.indexOf(t.id)<0;});
+  return [...TYP_DEFAULT, ...extras];
 }
 async function persistTypes(types){
-  const custom = types.filter(t=>!t.fixed);
+  // Salvar TODOS os tipos não-padrão (id não está em TYP_DEFAULT)
+  const defaultIds = TYP_DEFAULT.map(function(t){return t.id;});
+  const custom = types.filter(function(t){return defaultIds.indexOf(t.id)<0;});
   const v = JSON.stringify(custom);
   CACHE.settings['__types__'] = v;
   saveLocalCache();
